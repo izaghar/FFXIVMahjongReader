@@ -65,19 +65,25 @@ public class MainWindow : Window, IDisposable
     private Vector2 tileSize;
     private Vector2 suitSize;
 
+    private static Vector4 ColorForCount(int count) => count switch
+    {
+        >= 4 => ImGuiColors.HealerGreen,
+        3    => ImGuiColors.DalamudYellow,
+        2    => ImGuiColors.DalamudOrange,
+        1    => ImGuiColors.DalamudRed,
+        _    => ImGuiColors.DalamudGrey3,
+    };
+
     private void DrawTileRemaining(string suit, int number, bool isDora) {
         var notation = $"{number}{suit}";
         var count = isDora ? RemainingMap[notation] + RemainingMap[$"0{suit}"] : RemainingMap[notation];
-        var isDoraRemaing = isDora ? RemainingMap[$"0{suit}"] > 0 : false;
+        var isDoraRemaing = isDora && RemainingMap[$"0{suit}"] > 0;
         var texture = mjaiNotationToTexture[notation].GetWrapOrEmpty();
         ImGui.TableNextColumn();
         ImGui.Image(texture.Handle, tileSize);
         ImGui.SameLine();
-        if (isDoraRemaing) {
-            ImGui.TextColored(ImGuiColors.DalamudOrange, "x" + count);
-        } else {
-            ImGui.Text("x" + count);
-        }
+        var label = isDoraRemaing ? "x" + count + "*" : "x" + count;
+        ImGui.TextColored(ColorForCount(count), label);
     }
 
     private void DrawSuitRemaining(string suit) {
@@ -92,11 +98,12 @@ public class MainWindow : Window, IDisposable
     public override void Draw()
     {
         var avail = ImGui.GetContentRegionAvail();
-        var textW = ImGui.CalcTextSize("x4").X;
+        var textW = ImGui.CalcTextSize("x4*").X;
         var perColWidth = avail.X / 4f;
-        var tileH = MathF.Max(20f, MathF.Min(
+        var maxTileH = ImGui.GetTextLineHeight() * 2.0f;
+        var tileH = MathF.Max(16f, MathF.Min(maxTileH, MathF.Min(
             (avail.Y - 30f) / 11.5f,
-            (perColWidth - textW - 12f) * 1.3f));
+            (perColWidth - textW - 12f) * 1.3f)));
         var tileW = tileH / 1.3f;
         tileSize = new Vector2(tileW, tileH);
         suitSize = new Vector2(tileH, tileH);
@@ -108,16 +115,16 @@ public class MainWindow : Window, IDisposable
                 ImGui.TableNextRow();
                 bool isDora = i == 5;
 
-                DrawTileRemaining(Suit.MAN, i, isDora);
-                DrawTileRemaining(Suit.PIN, i, isDora);
                 DrawTileRemaining(Suit.SOU, i, isDora);
+                DrawTileRemaining(Suit.PIN, i, isDora);
+                DrawTileRemaining(Suit.MAN, i, isDora);
 
                 if (i == 3) {
-                    DrawSuitRemaining(Suit.MAN);
+                    DrawSuitRemaining(Suit.SOU);
                 } else if (i == 5) {
                     DrawSuitRemaining(Suit.PIN);
                 } else if (i == 7) {
-                    DrawSuitRemaining(Suit.SOU);
+                    DrawSuitRemaining(Suit.MAN);
                 } else {
                     ImGui.TableNextColumn();
                 }
@@ -129,7 +136,7 @@ public class MainWindow : Window, IDisposable
 
         if (ImGui.BeginTable("#TilesWind", 4, tableFlags)) {
             ImGui.TableNextRow();
-            for (var i = 1; i < 5; i++) {
+            for (var i = 4; i >= 1; i--) {
                 DrawTileRemaining(Suit.HONOR, i, false);
             }
             ImGui.EndTable();
@@ -137,7 +144,7 @@ public class MainWindow : Window, IDisposable
 
         if (ImGui.BeginTable("#TilesDragon", 3, tableFlags)) {
             ImGui.TableNextRow();
-            for (var i = 5; i < 8; i++) {
+            for (var i = 7; i >= 5; i--) {
                 DrawTileRemaining(Suit.HONOR, i, false);
             }
             ImGui.EndTable();
