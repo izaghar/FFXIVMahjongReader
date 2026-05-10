@@ -1,38 +1,29 @@
-﻿using System;
-using System.IO;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Linq;
 using System.Threading.Tasks;
 using Dalamud.Interface.Windowing;
 using Dalamud.Game.Command;
-using Dalamud.IoC;
-using Dalamud.Interface;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using Dalamud.Game.Addon.Lifecycle;
 using Dalamud.Game.Addon.Lifecycle.AddonArgTypes;
 using GameModel;
 using FFXIVClientStructs.FFXIV.Component.GUI;
-using ImGuiNET;
 using MahjongReader.Windows;
-using Dalamud.Interface.Utility;
 
 namespace MahjongReader
 {
     public sealed class Plugin : IDalamudPlugin
     {
-        public string Name => "Sample Plugin";
         private const string CommandName = "/mahjong";
 
+        private readonly IDalamudPluginInterface pluginInterface;
+        private readonly ICommandManager commandManager;
+        private readonly IGameGui gameGui;
+        private readonly IPluginLog pluginLog;
+        private readonly IAddonLifecycle addonLifecycle;
 
-        [PluginService] public static IGameGui GameGui { get; private set; } = null!;
-        [PluginService] public static IPluginLog PluginLog { get; private set; } = null!;
-        [PluginService] internal static IAddonLifecycle AddonLifecycle { get; private set; } = null!;
-        [PluginService] internal static ITextureProvider TextureProvider { get; private set; } = null!;
-
-        private DalamudPluginInterface PluginInterface { get; init; }
-        private ICommandManager CommandManager { get; init; }
         public Configuration Configuration { get; init; }
         public WindowSystem WindowSystem = new("MahjongReader");
 
@@ -45,55 +36,67 @@ namespace MahjongReader
         private YakuDetector YakuDetector { get; init; }
 
         public Plugin(
-            [RequiredVersion("1.0")] DalamudPluginInterface pluginInterface,
-            [RequiredVersion("1.0")] ICommandManager commandManager)
+            IDalamudPluginInterface pluginInterface,
+            ICommandManager commandManager,
+            IGameGui gameGui,
+            IPluginLog pluginLog,
+            IAddonLifecycle addonLifecycle,
+            ITextureProvider textureProvider)
         {
-            this.PluginInterface = pluginInterface;
-            this.CommandManager = commandManager;
+            this.pluginInterface = pluginInterface;
+            this.commandManager = commandManager;
+            this.gameGui = gameGui;
+            this.pluginLog = pluginLog;
+            this.addonLifecycle = addonLifecycle;
 
-            this.Configuration = this.PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
-            this.Configuration.Initialize(this.PluginInterface);
+            Configuration = pluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
 
-            ConfigWindow = new ConfigWindow(this);
-            MainWindow = new MainWindow(this, PluginLog);
-            
+            ConfigWindow = new ConfigWindow(this, pluginInterface);
+            MainWindow = new MainWindow(this, pluginLog, textureProvider);
+
             WindowSystem.AddWindow(ConfigWindow);
             WindowSystem.AddWindow(MainWindow);
 
-            this.CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
+            commandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
             {
                 HelpMessage = "Tracks observed Mahjong tiles and available Yaku (TODO)"
             });
 
-            this.PluginInterface.UiBuilder.Draw += DrawUI;
-            this.PluginInterface.UiBuilder.OpenConfigUi += DrawConfigUI;
+            pluginInterface.UiBuilder.Draw += DrawUI;
+            pluginInterface.UiBuilder.OpenConfigUi += DrawConfigUI;
+            pluginInterface.UiBuilder.OpenMainUi += ToggleMainUI;
 
-            AddonLifecycle.RegisterListener(AddonEvent.PostSetup, "Emj", OnAddonPostSetup);
-            ImportantPointers = new ImportantPointers(PluginLog);
-            NodeCrawlerUtils = new NodeCrawlerUtils(PluginLog);
+            addonLifecycle.RegisterListener(AddonEvent.PostSetup, "Emj", OnAddonPostSetup);
+            ImportantPointers = new ImportantPointers(pluginLog);
+            NodeCrawlerUtils = new NodeCrawlerUtils(pluginLog);
             YakuDetector = new YakuDetector();
         }
 
         public void Dispose()
         {
-            AddonLifecycle.UnregisterListener(OnAddonPostSetup);
-            AddonLifecycle.UnregisterListener(OnAddonPostRefresh);
-            this.WindowSystem.RemoveAllWindows();
-            
+            addonLifecycle.UnregisterListener(OnAddonPostSetup);
+            addonLifecycle.UnregisterListener(OnAddonPostRefresh);
+            addonLifecycle.UnregisterListener(OnAddonPreFinalize);
+            WindowSystem.RemoveAllWindows();
+
             ConfigWindow.Dispose();
             MainWindow.Dispose();
-            
-            this.CommandManager.RemoveHandler(CommandName);
+
+            pluginInterface.UiBuilder.Draw -= DrawUI;
+            pluginInterface.UiBuilder.OpenConfigUi -= DrawConfigUI;
+            pluginInterface.UiBuilder.OpenMainUi -= ToggleMainUI;
+
+            commandManager.RemoveHandler(CommandName);
         }
 
         private unsafe void OnAddonPostSetup(AddonEvent type, AddonArgs args) {
-            var addonPtr = args.Addon;
-            if (addonPtr == IntPtr.Zero) {
-                PluginLog.Info("Could not find Emj");
+            var addonPtr = (nint)args.Addon;
+            if (addonPtr == nint.Zero) {
+                pluginLog.Info("Could not find Emj");
                 return;
             }
-            AddonLifecycle.RegisterListener(AddonEvent.PostRefresh, "Emj", OnAddonPostRefresh);
-            AddonLifecycle.RegisterListener(AddonEvent.PreFinalize, "Emj", OnAddonPreFinalize);
+            addonLifecycle.RegisterListener(AddonEvent.PostRefresh, "Emj", OnAddonPostRefresh);
+            addonLifecycle.RegisterListener(AddonEvent.PreFinalize, "Emj", OnAddonPreFinalize);
 
             MainWindow.IsOpen = true;
             var addon = (AtkUnitBase*)addonPtr;
@@ -107,14 +110,14 @@ namespace MahjongReader
         }
 
         private void OnAddonPostRefresh(AddonEvent type, AddonArgs args) {
-            var addonPtr = args.Addon;
-            if (addonPtr == IntPtr.Zero) {
-                PluginLog.Info("Could not find Emj");
+            var addonPtr = (nint)args.Addon;
+            if (addonPtr == nint.Zero) {
+                pluginLog.Info("Could not find Emj");
                 return;
             }
 
             if (WindowUpdateTask == null || WindowUpdateTask.IsCompleted || WindowUpdateTask.IsFaulted || WindowUpdateTask.IsCanceled) {
-                PluginLog.Info("Running window updater");
+                pluginLog.Info("Running window updater");
                 WindowUpdateTask = Task.Run(WindowUpdater);
             }
         }
@@ -126,15 +129,15 @@ namespace MahjongReader
 #endif
 
             var observedTiles = GetObservedTiles();
-            PluginLog.Info($"tiles count: {observedTiles.Count}");
+            pluginLog.Info($"tiles count: {observedTiles.Count}");
             var remainingMap = TileTextureUtilities.TileCountTracker.RemainingFromObserved(observedTiles);
             var suitCounts = new Dictionary<string, int>();
-            foreach (var kvp in remainingMap) { // imagine testing
+            foreach (var kvp in remainingMap) {
                 var suit = kvp.Key.Substring(1, 1);
                 if (suit == Suit.HONOR) {
                     continue;
                 }
-                
+
                 if (suitCounts.ContainsKey(suit)) {
                     suitCounts[suit] += kvp.Value;
                 } else {
@@ -148,22 +151,22 @@ namespace MahjongReader
 #if DEBUG
     stopwatch.Stop();
     TimeSpan elapsedTime = stopwatch.Elapsed;
-    PluginLog.Info($"QQQQQQQ - Elapsed time: {elapsedTime.TotalMilliseconds} ms");
+    pluginLog.Info($"QQQQQQQ - Elapsed time: {elapsedTime.TotalMilliseconds} ms");
 #endif
         }
 
         private unsafe void OnCommand(string command, string args)
         {
-            var addonPtr = GameGui.GetAddonByName("Emj", 1);
+            var addonPtr = gameGui.GetAddonByName("Emj", 1);
 
-            if (addonPtr == IntPtr.Zero) {
-                PluginLog.Info("Could not find Emj");
+            if (addonPtr == nint.Zero) {
+                pluginLog.Info("Could not find Emj");
                 return;
             }
         }
 
         private unsafe List<ObservedTile> GetObservedDiscardTiles(List<IntPtr> ptrs, MahjongNodeType playerArea) {
-            var observedTileTextures = new List<ObservedTile>(); 
+            var observedTileTextures = new List<ObservedTile>();
             ptrs.ForEach(ptr => {
                 var castedPtr = (AtkResNode*)ptr;
                 var tileTexture = NodeCrawlerUtils.GetTileTextureFromDiscardTile(ptr);
@@ -196,35 +199,37 @@ namespace MahjongReader
                 }
             });
 
-            // Discarded tiles have their own node tree shape
             observedTileTextures.AddRange(GetObservedDiscardTiles(ImportantPointers.PlayerDiscardPile, MahjongNodeType.PLAYER_DISCARD_TILE));
             observedTileTextures.AddRange(GetObservedDiscardTiles(ImportantPointers.RightDiscardPile, MahjongNodeType.RIGHT_DISCARD_TILE));
             observedTileTextures.AddRange(GetObservedDiscardTiles(ImportantPointers.FarDiscardPile, MahjongNodeType.FAR_DISCARD_TILE));
             observedTileTextures.AddRange(GetObservedDiscardTiles(ImportantPointers.LeftDiscardPile, MahjongNodeType.LEFT_DISCARD_TILE));
 
-            // Player melds have their own shape
             ImportantPointers.PlayerMeldGroups.ForEach(ptr => {
                 var castedPtr = (AtkResNode*)ptr;
                 var tileTextures = NodeCrawlerUtils.GetTileTexturesFromPlayerMeldGroup(ptr);
                 tileTextures?.ForEach(texture => observedTileTextures.Add(new ObservedTile(MahjongNodeType.PLAYER_MELD_GROUP, texture)));
             });
 
-            // Melds that are not your own have a different node tree shape
             observedTileTextures.AddRange(GetObservedMeldTiles(ImportantPointers.RightMeldGroups, MahjongNodeType.RIGHT_MELD_GROUP));
             observedTileTextures.AddRange(GetObservedMeldTiles(ImportantPointers.FarMeldGroups, MahjongNodeType.FAR_MELD_GROUP));
             observedTileTextures.AddRange(GetObservedMeldTiles(ImportantPointers.LeftMeldGroups, MahjongNodeType.LEFT_MELD_GROUP));
-            
+
             return observedTileTextures;
         }
 
         private void DrawUI()
         {
-            this.WindowSystem.Draw();
+            WindowSystem.Draw();
         }
 
         public void DrawConfigUI()
         {
             ConfigWindow.IsOpen = true;
+        }
+
+        private void ToggleMainUI()
+        {
+            MainWindow.Toggle();
         }
     }
 }
