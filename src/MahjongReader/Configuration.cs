@@ -1,4 +1,4 @@
-﻿using Dalamud.Configuration;
+using Dalamud.Configuration;
 using Dalamud.Plugin;
 using System;
 
@@ -11,18 +11,9 @@ namespace MahjongReader
 
         public bool SomePropertyToBeSavedAndWithADefault { get; set; } = true;
 
-        // the below exist just to make saving less cumbersome
-        [NonSerialized]
-        private DalamudPluginInterface? PluginInterface;
-
-        public void Initialize(DalamudPluginInterface pluginInterface)
+        public void Save(IDalamudPluginInterface pluginInterface)
         {
-            this.PluginInterface = pluginInterface;
-        }
-
-        public void Save()
-        {
-            this.PluginInterface!.SavePluginConfig(this);
+            pluginInterface.SavePluginConfig(this);
         }
     }
 }

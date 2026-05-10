@@ -1,170 +1,146 @@
-﻿using GameModel;
+using GameModel;
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Colors;
-using Dalamud.Interface.Internal;
+using Dalamud.Interface.Textures;
+using Dalamud.Interface.Textures.TextureWraps;
+using Dalamud.Interface.Utility;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
-using ImGuiNET;
 
 namespace MahjongReader.Windows;
 
 public class MainWindow : Window, IDisposable
 {
-    private Plugin Plugin;
-    private IPluginLog PluginLog;
+    private readonly Plugin plugin;
+    private readonly IPluginLog pluginLog;
+    private readonly ITextureProvider textureProvider;
 
-    private List<ObservedTile> internalObservedTiles;
+    public List<ObservedTile> ObservedTiles { get; set; }
+    public Dictionary<string, int> RemainingMap { get; set; }
+    public Dictionary<string, int> SuitCounts { get; set; }
 
-    public List<ObservedTile> ObservedTiles
-    {
-        get
-        {
-            return internalObservedTiles;
-        }
-        set
-        {
-            internalObservedTiles = value;
-        }
-    }
+    private readonly Dictionary<string, ISharedImmediateTexture> mjaiNotationToTexture;
+    private readonly Dictionary<string, ISharedImmediateTexture> suitToTexture;
 
-    private Dictionary<string, int> internalRemainingMap;
-
-    public Dictionary<string, int> RemainingMap
-    {
-        get
-        {
-            return internalRemainingMap;
-        }
-        set
-        {
-            internalRemainingMap = value;
-        }
-    }
-
-    private Dictionary<string, int> internalSuitCounts;
-
-    public Dictionary<string, int> SuitCounts
-    {
-        get
-        {
-            return internalSuitCounts;
-        }
-        set
-        {
-            internalSuitCounts = value;
-        }
-    }
-
-    private Dictionary<string, IDalamudTextureWrap> mjaiNotationToTexture;
-    private Dictionary<string, IDalamudTextureWrap> suitToTexture;
-
-    public MainWindow(Plugin plugin, IPluginLog pluginLog) : base(
+    public MainWindow(Plugin plugin, IPluginLog pluginLog, ITextureProvider textureProvider) : base(
         "Mahjong Reader", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
     {
-        this.SizeConstraints = new WindowSizeConstraints
+        SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new Vector2(275, 330),
+            MinimumSize = new Vector2(220, 200),
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue)
         };
 
-        this.Plugin = plugin;
-        this.PluginLog = pluginLog;
-        internalObservedTiles = new List<ObservedTile>();
-        internalRemainingMap = new Dictionary<string, int>();
-        internalSuitCounts = new Dictionary<string, int>();
+        this.plugin = plugin;
+        this.pluginLog = pluginLog;
+        this.textureProvider = textureProvider;
+        ObservedTiles = new List<ObservedTile>();
+        RemainingMap = TileTextureUtilities.TileCountTracker.RemainingFromObserved(ObservedTiles);
+        SuitCounts = new Dictionary<string, int>();
+        foreach (var kvp in RemainingMap) {
+            var suit = kvp.Key.Substring(1, 1);
+            if (suit == Suit.HONOR) continue;
+            if (SuitCounts.ContainsKey(suit)) SuitCounts[suit] += kvp.Value;
+            else SuitCounts.Add(suit, kvp.Value);
+        }
 
         mjaiNotationToTexture = new();
-        // setup textures
         foreach (var notationToTextureId in TileTextureUtilities.NotationToTextureId) {
-            var maybeTex = Plugin.TextureProvider.GetIcon(uint.Parse(notationToTextureId.Value));
-            if (maybeTex == null) {
-                PluginLog.Error($"Bad texture id for notation ${notationToTextureId.Key}");
-                continue;
-            }
-            mjaiNotationToTexture.Add(notationToTextureId.Key, maybeTex);
+            mjaiNotationToTexture.Add(
+                notationToTextureId.Key,
+                textureProvider.GetFromGameIcon(new GameIconLookup(uint.Parse(notationToTextureId.Value))));
         }
 
         suitToTexture = new();
-        // maybe one day we'll support traditional properly
-        suitToTexture.Add(Suit.MAN, Plugin.TextureProvider.GetIcon(uint.Parse("076001"))!);
-        suitToTexture.Add(Suit.PIN, Plugin.TextureProvider.GetIcon(uint.Parse("076010"))!);
-        suitToTexture.Add(Suit.SOU, Plugin.TextureProvider.GetIcon(uint.Parse("076019"))!);
+        suitToTexture.Add(Suit.MAN, textureProvider.GetFromGameIcon(new GameIconLookup(76001)));
+        suitToTexture.Add(Suit.PIN, textureProvider.GetFromGameIcon(new GameIconLookup(76010)));
+        suitToTexture.Add(Suit.SOU, textureProvider.GetFromGameIcon(new GameIconLookup(76019)));
     }
 
     public void Dispose() { }
 
+    private Vector2 tileSize;
+    private Vector2 suitSize;
 
     private void DrawTileRemaining(string suit, int number, bool isDora) {
         var notation = $"{number}{suit}";
-        var count = isDora ? internalRemainingMap[notation] + internalRemainingMap[$"0{suit}"] : internalRemainingMap[notation];
-        var isDoraRemaing = isDora ? internalRemainingMap[$"0{suit}"] > 0 : false;
-        var texture = mjaiNotationToTexture[notation];
-        var scale = new Vector2(texture.Width, texture.Height);
-        var textSpacing = new Vector2(0, 0);
+        var count = isDora ? RemainingMap[notation] + RemainingMap[$"0{suit}"] : RemainingMap[notation];
+        var isDoraRemaing = isDora ? RemainingMap[$"0{suit}"] > 0 : false;
+        var texture = mjaiNotationToTexture[notation].GetWrapOrEmpty();
         ImGui.TableNextColumn();
-        ImGui.Image(texture.ImGuiHandle, scale);
-        ImGui.SameLine();
-        ImGui.Dummy(textSpacing);
+        ImGui.Image(texture.Handle, tileSize);
         ImGui.SameLine();
         if (isDoraRemaing) {
-            ImGui.TextColored(ImGuiColors.DalamudOrange, "x " + count);
+            ImGui.TextColored(ImGuiColors.DalamudOrange, "x" + count);
         } else {
-            ImGui.Text("x " + count);
+            ImGui.Text("x" + count);
         }
     }
 
     private void DrawSuitRemaining(string suit) {
-        var count = internalSuitCounts[suit];
-        var texture = suitToTexture[suit];
-        var scale = new Vector2(texture.Width, texture.Height);
-        var textSpacing = new Vector2(0, 0);
+        var count = SuitCounts[suit];
+        var texture = suitToTexture[suit].GetWrapOrEmpty();
         ImGui.TableNextColumn();
-        ImGui.Image(texture.ImGuiHandle, scale);
+        ImGui.Image(texture.Handle, suitSize);
         ImGui.SameLine();
-        ImGui.Dummy(textSpacing);
-        ImGui.SameLine();
-        ImGui.Text("x " + count);
+        ImGui.Text("x" + count);
     }
+
     public override void Draw()
     {
-        ImGui.BeginTable("#Tiles", 4, ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.SizingFixedFit);
-        for (var i = 1; i < 10; i++) {
-            ImGui.TableNextRow();
-            bool isDora = i == 5;
+        var avail = ImGui.GetContentRegionAvail();
+        var textW = ImGui.CalcTextSize("x4").X;
+        var perColWidth = avail.X / 4f;
+        var tileH = MathF.Max(20f, MathF.Min(
+            (avail.Y - 30f) / 11.5f,
+            (perColWidth - textW - 12f) * 1.3f));
+        var tileW = tileH / 1.3f;
+        tileSize = new Vector2(tileW, tileH);
+        suitSize = new Vector2(tileH, tileH);
 
-            DrawTileRemaining(Suit.MAN, i, isDora);
-            DrawTileRemaining(Suit.PIN, i, isDora);
-            DrawTileRemaining(Suit.SOU, i, isDora);
+        var tableFlags = ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.SizingFixedFit;
 
-            if (i == 3) {
-                DrawSuitRemaining(Suit.MAN);
-            } else if (i == 5) {
-                DrawSuitRemaining(Suit.PIN);
-            } else if (i == 7) {
-                DrawSuitRemaining(Suit.SOU);
-            } else {
-                ImGui.TableNextColumn();
+        if (ImGui.BeginTable("#Tiles", 4, tableFlags)) {
+            for (var i = 1; i < 10; i++) {
+                ImGui.TableNextRow();
+                bool isDora = i == 5;
+
+                DrawTileRemaining(Suit.MAN, i, isDora);
+                DrawTileRemaining(Suit.PIN, i, isDora);
+                DrawTileRemaining(Suit.SOU, i, isDora);
+
+                if (i == 3) {
+                    DrawSuitRemaining(Suit.MAN);
+                } else if (i == 5) {
+                    DrawSuitRemaining(Suit.PIN);
+                } else if (i == 7) {
+                    DrawSuitRemaining(Suit.SOU);
+                } else {
+                    ImGui.TableNextColumn();
+                }
             }
+            ImGui.EndTable();
         }
-        ImGui.EndTable();
 
-        ImGui.Dummy(new Vector2(0, 40));
+        ImGuiHelpers.ScaledDummy(0, 6);
 
-        ImGui.BeginTable("#TilesWind", 4, ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.SizingFixedFit);
-        ImGui.TableNextRow();
-        for (var i = 1; i < 5; i++) {
-            DrawTileRemaining(Suit.HONOR, i, false);
+        if (ImGui.BeginTable("#TilesWind", 4, tableFlags)) {
+            ImGui.TableNextRow();
+            for (var i = 1; i < 5; i++) {
+                DrawTileRemaining(Suit.HONOR, i, false);
+            }
+            ImGui.EndTable();
         }
-        ImGui.EndTable();
 
-        ImGui.BeginTable("#TilesDragon", 3, ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.SizingFixedFit);
-        ImGui.TableNextRow();
-        ImGui.TableNextRow();
-        for (var i = 5; i < 8; i++) {
-            DrawTileRemaining(Suit.HONOR, i, false);
+        if (ImGui.BeginTable("#TilesDragon", 3, tableFlags)) {
+            ImGui.TableNextRow();
+            for (var i = 5; i < 8; i++) {
+                DrawTileRemaining(Suit.HONOR, i, false);
+            }
+            ImGui.EndTable();
         }
-        ImGui.EndTable();
     }
 }
