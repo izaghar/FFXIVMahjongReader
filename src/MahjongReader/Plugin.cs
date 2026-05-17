@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Numerics;
 using System.Threading.Tasks;
+using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
 using Dalamud.Game.Command;
 using Dalamud.Plugin;
@@ -219,7 +221,63 @@ namespace MahjongReader
 
         private void DrawUI()
         {
+            DetectGameTileHover();
             WindowSystem.Draw();
+        }
+
+        private unsafe void DetectGameTileHover()
+        {
+            MainWindow.HoveredGameNotation = null;
+
+            var addonPtr = gameGui.GetAddonByName("Emj", 1);
+            if (addonPtr == nint.Zero) return;
+            var addon = (AtkUnitBase*)(nint)addonPtr;
+            var mousePos = ImGui.GetMousePos();
+
+            foreach (var ptr in ImportantPointers.PlayerHand) {
+                var t = NodeCrawlerUtils.GetTileTextureFromPlayerHandTile(ptr);
+                if (t == null) continue;
+                var (pos, size) = GetNodeScreenRect(addon, (AtkResNode*)ptr);
+                if (PointInRect(mousePos, pos, size)) {
+                    MainWindow.HoveredGameNotation = t.MjaiNotation;
+                    return;
+                }
+            }
+
+            if (CheckDiscardPile(addon, ImportantPointers.PlayerDiscardPile, mousePos)) return;
+            if (CheckDiscardPile(addon, ImportantPointers.LeftDiscardPile, mousePos)) return;
+            if (CheckDiscardPile(addon, ImportantPointers.RightDiscardPile, mousePos)) return;
+            if (CheckDiscardPile(addon, ImportantPointers.FarDiscardPile, mousePos)) return;
+        }
+
+        private unsafe bool CheckDiscardPile(AtkUnitBase* addon, List<IntPtr> pile, Vector2 mousePos)
+        {
+            foreach (var ptr in pile) {
+                var dt = NodeCrawlerUtils.GetTileTextureFromDiscardTile(ptr);
+                if (dt == null) continue;
+                var (pos, size) = GetNodeScreenRect(addon, (AtkResNode*)ptr);
+                if (PointInRect(mousePos, pos, size)) {
+                    MainWindow.HoveredGameNotation = dt.TileTexture.MjaiNotation;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static bool PointInRect(Vector2 point, Vector2 origin, Vector2 size)
+        {
+            if (size.X <= 0f || size.Y <= 0f) return false;
+            return point.X >= origin.X && point.X <= origin.X + size.X
+                && point.Y >= origin.Y && point.Y <= origin.Y + size.Y;
+        }
+
+        private static unsafe (Vector2 Pos, Vector2 Size) GetNodeScreenRect(AtkUnitBase* addon, AtkResNode* node)
+        {
+            float sx, sy;
+            node->GetScale(&sx, &sy);
+            var pos = new Vector2(node->ScreenX, node->ScreenY);
+            var size = new Vector2(node->Width * sx, node->Height * sy);
+            return (pos, size);
         }
 
         public void DrawConfigUI()

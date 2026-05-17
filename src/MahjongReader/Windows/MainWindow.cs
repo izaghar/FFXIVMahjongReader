@@ -22,15 +22,16 @@ public class MainWindow : Window, IDisposable
     public Dictionary<string, int> RemainingMap { get; set; }
     public Dictionary<string, int> SuitCounts { get; set; }
 
+    public string? HoveredGameNotation { get; set; }
+
     private readonly Dictionary<string, ISharedImmediateTexture> mjaiNotationToTexture;
-    private readonly Dictionary<string, ISharedImmediateTexture> suitToTexture;
 
     public MainWindow(Plugin plugin, IPluginLog pluginLog, ITextureProvider textureProvider) : base(
-        "Mahjong Reader", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
+        "Doma Helper", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
     {
         SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new Vector2(220, 200),
+            MinimumSize = new Vector2(280, 220),
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue)
         };
 
@@ -40,12 +41,6 @@ public class MainWindow : Window, IDisposable
         ObservedTiles = new List<ObservedTile>();
         RemainingMap = TileTextureUtilities.TileCountTracker.RemainingFromObserved(ObservedTiles);
         SuitCounts = new Dictionary<string, int>();
-        foreach (var kvp in RemainingMap) {
-            var suit = kvp.Key.Substring(1, 1);
-            if (suit == Suit.HONOR) continue;
-            if (SuitCounts.ContainsKey(suit)) SuitCounts[suit] += kvp.Value;
-            else SuitCounts.Add(suit, kvp.Value);
-        }
 
         mjaiNotationToTexture = new();
         foreach (var notationToTextureId in TileTextureUtilities.NotationToTextureId) {
@@ -53,17 +48,11 @@ public class MainWindow : Window, IDisposable
                 notationToTextureId.Key,
                 textureProvider.GetFromGameIcon(new GameIconLookup(uint.Parse(notationToTextureId.Value))));
         }
-
-        suitToTexture = new();
-        suitToTexture.Add(Suit.MAN, textureProvider.GetFromGameIcon(new GameIconLookup(76001)));
-        suitToTexture.Add(Suit.PIN, textureProvider.GetFromGameIcon(new GameIconLookup(76010)));
-        suitToTexture.Add(Suit.SOU, textureProvider.GetFromGameIcon(new GameIconLookup(76019)));
     }
 
     public void Dispose() { }
 
     private Vector2 tileSize;
-    private Vector2 suitSize;
 
     private static Vector4 ColorForCount(int count) => count switch
     {
@@ -74,80 +63,85 @@ public class MainWindow : Window, IDisposable
         _    => ImGuiColors.DalamudGrey3,
     };
 
-    private void DrawTileRemaining(string suit, int number, bool isDora) {
-        var notation = $"{number}{suit}";
-        var count = isDora ? RemainingMap[notation] + RemainingMap[$"0{suit}"] : RemainingMap[notation];
-        var isDoraRemaing = isDora && RemainingMap[$"0{suit}"] > 0;
-        var texture = mjaiNotationToTexture[notation].GetWrapOrEmpty();
-        ImGui.TableNextColumn();
-        ImGui.Image(texture.Handle, tileSize);
-        ImGui.SameLine();
-        var label = isDoraRemaing ? "x" + count + "*" : "x" + count;
-        ImGui.TextColored(ColorForCount(count), label);
-    }
-
-    private void DrawSuitRemaining(string suit) {
-        var count = SuitCounts[suit];
-        var texture = suitToTexture[suit].GetWrapOrEmpty();
-        ImGui.TableNextColumn();
-        ImGui.Image(texture.Handle, suitSize);
-        ImGui.SameLine();
-        ImGui.Text("x" + count);
-    }
-
     public override void Draw()
     {
-        var avail = ImGui.GetContentRegionAvail();
-        var textW = ImGui.CalcTextSize("x4*").X;
-        var perColWidth = avail.X / 4f;
-        var maxTileH = ImGui.GetTextLineHeight() * 2.0f;
-        var tileH = MathF.Max(16f, MathF.Min(maxTileH, MathF.Min(
-            (avail.Y - 30f) / 11.5f,
-            (perColWidth - textW - 12f) * 1.3f)));
-        var tileW = tileH / 1.3f;
-        tileSize = new Vector2(tileW, tileH);
-        suitSize = new Vector2(tileH, tileH);
+        var tileH = ImGui.GetTextLineHeight() * 2.6f;
+        tileSize = new Vector2(tileH / 1.3f, tileH);
 
-        var tableFlags = ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.SizingFixedFit;
+        DrawNumberSuitSection(Suit.MAN, "Man", "Characters");
+        DrawNumberSuitSection(Suit.PIN, "Pin", "Dots");
+        DrawNumberSuitSection(Suit.SOU, "Sou", "Bamboo");
 
-        if (ImGui.BeginTable("#Tiles", 4, tableFlags)) {
+        DrawHonorSection("Winds", new[] { 4, 1, 2, 3 });
+        DrawHonorSection("Dragons", new[] { 6, 5, 7 });
+    }
+
+    private int SuitTotalRemaining(string suit)
+    {
+        var total = 0;
+        for (var i = 1; i < 10; i++) total += RemainingMap[$"{i}{suit}"];
+        total += RemainingMap[$"0{suit}"];
+        return total;
+    }
+
+    private void DrawNumberSuitSection(string suit, string mainName, string subtitle)
+    {
+        ImGui.Text($"{mainName} ({subtitle})");
+        ImGui.SameLine();
+        ImGui.TextDisabled($"({SuitTotalRemaining(suit)} remaining)");
+
+        if (ImGui.BeginTable($"##suit-{suit}", 9, ImGuiTableFlags.SizingFixedFit | ImGuiTableFlags.NoBordersInBody)) {
+            ImGui.TableNextRow();
             for (var i = 1; i < 10; i++) {
-                ImGui.TableNextRow();
-                bool isDora = i == 5;
-
-                DrawTileRemaining(Suit.SOU, i, isDora);
-                DrawTileRemaining(Suit.PIN, i, isDora);
-                DrawTileRemaining(Suit.MAN, i, isDora);
-
-                if (i == 3) {
-                    DrawSuitRemaining(Suit.SOU);
-                } else if (i == 5) {
-                    DrawSuitRemaining(Suit.PIN);
-                } else if (i == 7) {
-                    DrawSuitRemaining(Suit.MAN);
-                } else {
-                    ImGui.TableNextColumn();
-                }
+                var notation = $"{i}{suit}";
+                var isDora = i == 5;
+                var count = isDora ? RemainingMap[notation] + RemainingMap[$"0{suit}"] : RemainingMap[notation];
+                var isDoraRemaining = isDora && RemainingMap[$"0{suit}"] > 0;
+                DrawTileCell(notation, count, isDoraRemaining);
             }
             ImGui.EndTable();
         }
 
-        ImGuiHelpers.ScaledDummy(0, 6);
+        ImGuiHelpers.ScaledDummy(0, 4);
+    }
 
-        if (ImGui.BeginTable("#TilesWind", 4, tableFlags)) {
+    private void DrawHonorSection(string title, int[] indices)
+    {
+        ImGui.Text(title);
+
+        if (ImGui.BeginTable($"##honor-{title}", indices.Length, ImGuiTableFlags.SizingFixedFit | ImGuiTableFlags.NoBordersInBody)) {
             ImGui.TableNextRow();
-            for (var i = 4; i >= 1; i--) {
-                DrawTileRemaining(Suit.HONOR, i, false);
+            foreach (var idx in indices) {
+                var notation = $"{idx}{Suit.HONOR}";
+                DrawTileCell(notation, RemainingMap[notation], false);
             }
             ImGui.EndTable();
         }
 
-        if (ImGui.BeginTable("#TilesDragon", 3, tableFlags)) {
-            ImGui.TableNextRow();
-            for (var i = 7; i >= 5; i--) {
-                DrawTileRemaining(Suit.HONOR, i, false);
-            }
-            ImGui.EndTable();
+        ImGuiHelpers.ScaledDummy(0, 4);
+    }
+
+    private void DrawTileCell(string notation, int displayCount, bool isDoraRemaining)
+    {
+        var texture = mjaiNotationToTexture[notation].GetWrapOrEmpty();
+        ImGui.TableNextColumn();
+        ImGui.BeginGroup();
+        ImGui.Image(texture.Handle, tileSize);
+        var imgMin = ImGui.GetItemRectMin();
+        var imgMax = ImGui.GetItemRectMax();
+        var label = isDoraRemaining ? displayCount + "*" : displayCount.ToString();
+        var labelW = ImGui.CalcTextSize(label).X;
+        var offset = MathF.Max(0f, (tileSize.X - labelW) * 0.5f);
+        ImGui.SetCursorPosX(ImGui.GetCursorPosX() + offset);
+        ImGui.TextColored(ColorForCount(displayCount), label);
+        ImGui.EndGroup();
+
+        if (notation == HoveredGameNotation) {
+            var color = ImGui.ColorConvertFloat4ToU32(new Vector4(1.0f, 0.85f, 0.2f, 0.95f));
+            ImGui.GetWindowDrawList().AddRect(
+                new Vector2(imgMin.X - 2f, imgMin.Y - 2f),
+                new Vector2(imgMax.X + 2f, imgMax.Y + 2f),
+                color, 3f, ImDrawFlags.None, 2f);
         }
     }
 }
